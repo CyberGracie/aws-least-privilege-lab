@@ -1,367 +1,106 @@
-# 🔐 AWS IAM Least Privilege Lab — S3 Access Control Challenge
+# 🔐 AWS IAM Least Privilege Lab
 
-> **A hands-on security lab demonstrating how to write secure, scoped IAM policies that enforce the Principle of Least Privilege — using Amazon S3 as the real-world target resource.**
+> **A hands-on security challenge demonstrating the Principle of Least Privilege on AWS — from identifying a broken policy to building a scoped IAM policy, creating an S3 bucket, and verifying that a Junior Cloud Engineer can only do exactly what they're supposed to.**
 
 ---
 
 ## 📋 Table of Contents
 
-- [The Security Challenge](#the-security-challenge)
-- [What is the Principle of Least Privilege?](#what-is-the-principle-of-least-privilege)
-- [Part 1 — The Challenge: Fix the Broken Policy](#part-1--the-challenge-fix-the-broken-policy)
-- [Part 2 — Writing the Secure Policy](#part-2--writing-the-secure-policy)
-- [Part 3 — Lab Implementation](#part-3--lab-implementation)
-  - [Step 1 — Navigate to Amazon S3](#step-1--navigate-to-amazon-s3)
-  - [Step 2 — Create the S3 Bucket](#step-2--create-the-s3-bucket)
-  - [Step 3 — Upload a Test File](#step-3--upload-a-test-file)
-  - [Step 4 — Create the IAM User](#step-4--create-the-iam-user)
-  - [Step 5 — Create the Custom IAM Policy](#step-5--create-the-custom-iam-policy)
-  - [Step 6 — Attach the Policy to the User](#step-6--attach-the-policy-to-the-user)
-  - [Step 7 — Sign In as the Junior Engineer](#step-7--sign-in-as-the-junior-engineer)
-  - [Step 8 — Verify Access is Correctly Scoped](#step-8--verify-access-is-correctly-scoped)
-- [Results & Proof of Least Privilege](#results--proof-of-least-privilege)
-- [Security Takeaways](#security-takeaways)
+- [The Challenge](#the-challenge)
+- [The Problem — Whats Wrong With This Policy](#the-problem--whats-wrong-with-this-policy)
+- [The Fix — Rewriting the Policy Correctly](#the-fix--rewriting-the-policy-correctly)
+- [Key Concepts](#key-concepts)
+- [Architecture Overview](#architecture-overview)
+- [Phase 1 — Create the S3 Bucket](#phase-1--create-the-s3-bucket)
+- [Phase 2 — Upload a Test File](#phase-2--upload-a-test-file)
+- [Phase 3 — Create the IAM User](#phase-3--create-the-iam-user)
+- [Phase 4 — Create the Custom IAM Policy](#phase-4--create-the-custom-iam-policy)
+- [Phase 5 — Attach the Policy to the User](#phase-5--attach-the-policy-to-the-user)
+- [Phase 6 — Sign In and Verify Permissions](#phase-6--sign-in-and-verify-permissions)
+- [Results — Least Privilege in Action](#results--least-privilege-in-action)
+- [Security Lessons Learned](#security-lessons-learned)
 
 ---
 
-## The Security Challenge
+## The Challenge
 
-> **Scenario:** A new **Junior Cloud Engineer** has joined the team. They only need to **view files** in an S3 bucket called `companypublic-assets`. They should **NOT** be able to delete files or access the `company-payroll` bucket.
+### Scenario
 
-**The Broken Policy (What NOT to do):**
-
-```json
-{
-  "Effect": "Allow",
-  "Action": "s3:*",
-  "Resource": "*"
-}
-```
-
-This single policy statement is a critical security misconfiguration. Let's break down exactly why — and then fix it.
-
----
-
-## What is the Principle of Least Privilege?
-
-The **Principle of Least Privilege (PoLP)** is one of the most fundamental concepts in cybersecurity and cloud security. It states:
-
-> *"Every user, process, or system should have access to only the minimum resources and permissions required to perform its specific function — nothing more."*
-
-In practice, this means:
-- A read-only user should **never** have delete permissions
-- A user who needs access to one bucket should **never** be able to see all buckets
-- Permissions should be scoped to the **exact resource** needed, not `*` (everything)
-
-### Why Does It Matter?
-
-| Without PoLP | With PoLP |
-|---|---|
-| A compromised account can delete all S3 data | A compromised account can only read one bucket |
-| Insider threats can access sensitive payroll data | Insider threats are blocked from out-of-scope resources |
-| Accidental misconfiguration can destroy infrastructure | Scope limits the blast radius of mistakes |
-| Audit trails are noisy and hard to review | Actions are predictable and easy to audit |
-
----
-
-## Part 1 — The Challenge: Fix the Broken Policy
-
-### ❌ The Insecure Policy
-
-```json
-{
-  "Effect": "Allow",
-  "Action": "s3:*",
-  "Resource": "*"
-}
-```
-
-### 🔍 Identifying the Two Problems
-
-**Problem 1 — Wildcard Action (`s3:*`)**
-
-`s3:*` grants **every single S3 action** to the user. This includes:
-
-| Action | Risk |
-|---|---|
-| `s3:DeleteObject` | Can permanently delete any file in any bucket |
-| `s3:DeleteBucket` | Can delete entire buckets including all data |
-| `s3:PutObject` | Can upload malicious files or overwrite existing ones |
-| `s3:GetBucketAcl` | Can read bucket permission configurations |
-| `s3:PutBucketPolicy` | Can modify who has access to the bucket |
-| `s3:PutBucketAcl` | Can change ownership and access settings |
-
-A Junior Cloud Engineer who only needs to **view public assets** has no business having any of these permissions.
-
-**Problem 2 — Wildcard Resource (`"Resource": "*"`)**
-
-`"Resource": "*"` means this policy applies to **every S3 bucket and every object** in the entire AWS account. This means the user can perform the above actions on:
-- `companypublic-assets` ← the bucket they should access
-- `company-payroll` ← the bucket they should **never** see
-- Every other bucket that exists now or is created in the future
-
-This violates data segregation and confidentiality principles — particularly critical when sensitive resources like payroll data are in the same account.
-
----
-
-### ✅ The Fixed Policy (Principle of Least Privilege Applied)
-
-The corrected policy grants only what is needed — nothing more:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowViewBucketList",
-      "Effect": "Allow",
-      "Action": "s3:ListAllMyBuckets",
-      "Resource": "*"
-    },
-    {
-      "Sid": "AllowListPublicAssetsBucket",
-      "Effect": "Allow",
-      "Action": "s3:ListBucket",
-      "Resource": "arn:aws:s3:::companypublic-assets"
-    },
-    {
-      "Sid": "AllowReadPublicAssetsObjects",
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::companypublic-assets/*"
-    }
-  ]
-}
-```
-
-### Why Each Statement is Here
-
-| Statement ID | Action | Resource | Reason |
-|---|---|---|---|
-| `AllowViewBucketList` | `s3:ListAllMyBuckets` | `*` | Required to display the bucket list in the S3 console. Without this, the user sees a blank screen — `*` is necessary here as this action has no resource-level control |
-| `AllowListPublicAssetsBucket` | `s3:ListBucket` | `arn:aws:s3:::companypublic-assets` | Allows listing the objects **inside** the correct bucket only. Scoped to exact bucket ARN. |
-| `AllowReadPublicAssetsObjects` | `s3:GetObject` | `arn:aws:s3:::companypublic-assets/*` | Allows downloading/viewing **files** inside the bucket. The `/*` means all objects within, but only this bucket. |
-
-### What This Policy CANNOT Do
-
-- ❌ Cannot list or access `company-payroll` bucket contents
-- ❌ Cannot delete any object (`s3:DeleteObject` not granted)
-- ❌ Cannot upload files (`s3:PutObject` not granted)
-- ❌ Cannot change bucket permissions (`s3:PutBucketPolicy` not granted)
-- ❌ Cannot delete the bucket (`s3:DeleteBucket` not granted)
-- ❌ Cannot view versioning, replication, or lifecycle settings
-
----
-
-## Part 2 — Writing the Secure Policy
-
-### The Goal
-
-Write a policy that allows **only** the `s3:GetObject` (read/download) action on a **specific resource**.
-
-### The Minimal Secure Read Policy
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowGetObjectPublicAssets",
-      "Effect": "Allow",
-      "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::companypublic-assets/*"
-    }
-  ]
-}
-```
-
-### Breaking Down Every Field
-
-```
-"Version": "2012-10-17"
-```
-The IAM policy language version. Always use `2012-10-17` — this is the current version that supports policy variables and all modern features.
-
-```
-"Statement": [ ... ]
-```
-An array of permission statements. Each statement is an independent rule. You can have multiple statements in one policy.
-
-```
-"Sid": "AllowGetObjectPublicAssets"
-```
-Statement ID — a human-readable label for this rule. Optional but strongly recommended for readability and debugging.
-
-```
-"Effect": "Allow"
-```
-Either `Allow` or `Deny`. AWS **denies by default** — you must explicitly allow what you want. `Deny` always wins over `Allow` when both apply.
-
-```
-"Action": "s3:GetObject"
-```
-The specific API call being permitted. `s3:GetObject` allows downloading (reading) an object's content. It does NOT allow listing, deleting, or modifying.
-
-```
-"Resource": "arn:aws:s3:::companypublic-assets/*"
-```
-The Amazon Resource Name (ARN) of the target. Breaking this down:
-- `arn` — Amazon Resource Name prefix
-- `aws` — AWS partition (use `aws-cn` for China, `aws-us-gov` for GovCloud)
-- `s3` — The service
-- `:::` — Region and account ID are omitted (S3 bucket names are globally unique)
-- `companypublic-assets` — The specific bucket name
-- `/*` — All objects within the bucket
-
-### The Amazon Resource Name (ARN) Pattern for S3
-
-```
-Bucket ARN:  arn:aws:s3:::bucket-name
-Object ARN:  arn:aws:s3:::bucket-name/object-key
-All objects: arn:aws:s3:::bucket-name/*
-```
-
-> 💡 **Key Insight:** When you need both `s3:ListBucket` (list files) AND `s3:GetObject` (read files), you need TWO separate resource lines — `s3:ListBucket` targets the **bucket**, and `s3:GetObject` targets the **objects inside** (`/*`). Using `/*` for `ListBucket` will cause an access denied error.
-
----
-
-## Part 3 — Lab Implementation
-
-Now we implement this in a live AWS environment to prove it works.
-
-### Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    AWS Account (Root)                    │
-│                                                         │
-│  ┌──────────────────┐    ┌──────────────────────────┐  │
-│  │   S3 Buckets      │    │       IAM Resources       │  │
-│  │                   │    │                           │  │
-│  │ ✅ companypublic- │    │  User: junior-cloud-      │  │
-│  │    assets         │    │        engineer           │  │
-│  │                   │    │                           │  │
-│  │ 🔒 company-       │    │  Policy: S3-ReadOnly-     │  │
-│  │    payroll        │    │          PublicAssets      │  │
-│  └──────────────────┘    └──────────────────────────┘  │
-│                                                         │
-│  junior-cloud-engineer → CAN: List & Read companypublic-assets
-│  junior-cloud-engineer → CANNOT: Access company-payroll │
-│  junior-cloud-engineer → CANNOT: Delete any files       │
-└─────────────────────────────────────────────────────────┘
-```
-
----
-
-### Step 1 — Navigate to Amazon S3
-
-In the AWS Console top search bar, type **`S3`** and select **S3 — Scalable Storage in the Cloud**.
-
-![Search for S3](assets/screenshots/Screenshot_2026-04-21_145623.png)
-
-> **What you see:** The AWS search results showing S3 under Services, with S3 Glacier and AWS Snow Family as related storage options. Also shown are S3-related features (S3 Files, S3 on Outposts, Exports to S3) and documentation links. Always select the top result under **Services**.
-
----
-
-### Step 2 — Create the S3 Bucket
-
-On the Amazon S3 landing page, click **Create bucket** (top-right panel).
-
-![Amazon S3 Landing Page](assets/screenshots/Screenshot_2026-04-21_145716.png)
-
-> **What you see:** The Amazon S3 service introduction page. The red arrow points to the **Create bucket** button in the top-right panel. The page also shows pricing information (pay only for what you use) and resource links including the User Guide, API Reference, and FAQs.
-
-On the Create bucket form, configure the following:
-
-![Create Bucket Configuration](assets/screenshots/Screenshot_2026-04-21_150646.png)
-
-> **What you see:** The Create bucket configuration page with:
-> - **Bucket name:** `companypublic-assets` (red arrow pointing to the name field)
->   - Bucket names must be 3–63 characters, globally unique, and use only lowercase letters, numbers, and hyphens
-> - **Object Ownership:** `ACLs disabled (recommended)` — all objects are owned by this account and access is controlled purely through IAM policies (not ACLs)
-> - **Block Public Access settings:** `Block all public access` ✅ checked — this is the secure default. Even though this bucket is named "public-assets", actual public access should be managed through IAM, not by opening the bucket to the internet.
+> A new **Junior Cloud Engineer** has joined the team. They only need to **view files** in an S3 storage bucket called `companypublic-assets`.
 >
-> Scroll down and click **Create bucket**.
+> They should **NOT** be able to:
+> - Delete files
+> - Access the `company-payroll` bucket
+> - Modify any resources
+> - List or access any other AWS service
 
-**Configuration summary:**
+### The Broken Policy
 
-| Setting | Value | Reason |
+The current policy in place looks like this:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "s3:*",
+  "Resource": "*"
+}
+```
+
+**Your Tasks:**
+1. Identify **two things wrong** with this policy
+2. **Rewrite** the policy in JSON to follow the Principle of Least Privilege
+3. **Build** the real-world implementation in AWS
+4. **Verify** the policy works correctly by testing as the IAM user
+
+---
+
+## The Problem — Whats Wrong With This Policy
+
+Before writing any code or clicking anything in the console, understand exactly what is broken.
+
+### Problem 1 — Wildcard Action (s3:*)
+
+```json
+"Action": "s3:*"
+```
+
+The `s3:*` wildcard grants **every single S3 action** to the user, including:
+
+| Action | What it does |
+|---|---|
+| `s3:DeleteObject` | Permanently delete any file |
+| `s3:DeleteBucket` | Delete entire buckets |
+| `s3:PutObject` | Upload and overwrite any file |
+| `s3:PutBucketPolicy` | Change bucket-level security settings |
+| `s3:GetBucketAcl` | Read access control lists |
+| `s3:PutEncryptionConfiguration` | Modify encryption settings |
+
+A Junior Cloud Engineer who only needs to **read** files has no business having delete, write, or administrative permissions.
+
+### Problem 2 — Wildcard Resource ("Resource": "*")
+
+```json
+"Resource": "*"
+```
+
+The `*` wildcard applies the policy to **every S3 bucket and every object** in the entire AWS account:
+
+- `companypublic-assets` — intended access only
+- `company-payroll` — critical sensitive data, should be BLOCKED
+- Any future bucket created in the account — automatic over-permission
+
+### Summary of Problems
+
+| Issue | Current (Broken) | Correct |
 |---|---|---|
-| Bucket name | `companypublic-assets` | Descriptive, matches ARN in our policy |
-| ACLs | Disabled | Use IAM policies for access control (best practice) |
-| Block all public access | Enabled | Prevents accidental internet exposure |
-| Region | US East (N. Virginia) | us-east-1 — default region |
-
-After clicking Create bucket, a green confirmation banner confirms success:
-
-![Bucket Created Successfully](assets/screenshots/Screenshot_2026-04-21_150732.png)
-
-> **What you see:** The `companypublic-assets` bucket dashboard showing:
-> - ✅ Green banner — *"Successfully created bucket 'companypublic-assets'"*
-> - The bucket is currently empty — `Objects (0)` and `No objects`
-> - Tab navigation: Objects, Metadata, Properties, Permissions, Metrics, Management, File systems, Access Points
-> - Action buttons: Copy S3 URI, Copy URL, Download, Open, Delete, Actions, Create folder, **Upload**
+| **Actions** | `s3:*` — everything | `s3:GetObject`, `s3:ListBucket` — read only |
+| **Resources** | `*` — all buckets | Specific ARN of `companypublic-assets` only |
 
 ---
 
-### Step 3 — Upload a Test File
+## The Fix — Rewriting the Policy Correctly
 
-Click the orange **Upload** button to add a test file to the bucket.
-
-![Upload File to Bucket](assets/screenshots/Screenshot_2026-04-21_174219.png)
-
-> **What you see:** The Upload page for `companypublic-assets`. Key areas:
-> - **Drag-and-drop zone** at the top — drag files directly here
-> - **Files and folders** section — shows `TesT IAM.txt` (1 total, 19.0 B) has been added
-> - The red arrow (top) points to the file listing — the file is queued for upload
-> - **Destination:** `s3://companypublic-assets` — confirms the correct bucket
-> - **Permissions** and **Properties** sections — expandable for advanced configuration
-> - The red arrow (bottom-right) points to the **Upload** button — click this to start the upload
-
-Click **Upload**.
-
-![Upload Succeeded](assets/screenshots/Screenshot_2026-04-21_174255.png)
-
-> **What you see:** The Upload status page confirming success:
-> - ✅ Green banner — *"Upload succeeded"*
-> - **Summary:** Destination `s3://companypublic-assets`, **Succeeded: 1 file, 19.0 B (100.00%)**, Failed: 0 files
-> - **Files and folders table:** `TesT IAM.txt` — text/plain, 19.0 B — Status: ✅ **Succeeded**
->
-> The test file is now in the bucket. This is the file the junior engineer should be able to **read** but not **delete**.
-
----
-
-### Step 4 — Create the IAM User
-
-Navigate to **IAM → Users → Create user** to create the Junior Cloud Engineer account.
-
-![Create IAM User — junior-cloud-engineer](assets/screenshots/Screenshot_2026-04-21_174730.png)
-
-> **What you see:** Step 1 of the Create User wizard — Specify user details. The red arrows highlight:
-> - **User name:** `junior-cloud-engineer` — a descriptive, role-based username
-> - **Console password:** `Autogenerated password` selected — AWS generates a secure random password (viewable after creation)
-> - **Users must create a new password at next sign-in:** ⬜ *Unchecked* — in this lab we're managing the password directly; in production this should be enabled
-> - **Next** button (bottom-right) — click to proceed to permissions
->
-> Click **Next**.
-
-> 💡 **Naming Convention Tip:** Use descriptive, role-based usernames like `junior-cloud-engineer`, `soc-analyst`, or `devops-lead` rather than personal names. This makes permissions auditing and off-boarding cleaner.
-
----
-
-### Step 5 — Create the Custom IAM Policy
-
-Before attaching permissions to the user, we need to create the custom policy. Navigate to **IAM → Policies**.
-
-![IAM Policies Page](assets/screenshots/Screenshot_2026-04-21_175322.png)
-
-> **What you see:** The IAM Policies list showing **1,484 policies** — a mix of AWS managed policies (orange box icons) and customer-managed policies. The red arrows highlight:
-> - **Policies** in the left sidebar (under Access Management)
-> - The orange **Create policy** button (top-right) — this is where we define our custom least-privilege policy
->
-> Click **Create policy**.
-
-In the Policy editor, select the **JSON** tab and enter the following policy:
+### The Secure Policy
 
 ```json
 {
@@ -389,212 +128,450 @@ In the Policy editor, select the **JSON** tab and enter the following policy:
 }
 ```
 
-![Policy JSON Editor](assets/screenshots/New_policy.png)
+### Why Three Statements?
 
-> **What you see:** The **Modify permissions in S3-ReadOnly-PublicAssets** page with the JSON policy editor open. The policy contains three statements (visible on lines 4–16):
-> - **Statement 1** (`AllowViewBucketList`) — `s3:ListAllMyBuckets` on `*` — allows the bucket list to render in the S3 console
-> - **Statement 2** (`AllowListPublicAssetsBucket`) — `s3:ListBucket` on `arn:aws:s3:::companypublic-assets` — allows listing objects inside the correct bucket
-> - The right panel shows **Edit statement** for `AllowViewBucketList` with the S3 service selected under **Included**
->
-> The **Visual** and **JSON** toggle buttons (top-right of the editor) let you switch between a visual policy builder and raw JSON. JSON mode gives the most control.
+S3 permissions work at two levels — the **bucket level** and the **object level** — requiring separate statements:
 
-Name the policy **`S3-ReadOnly-PublicAssets`** and click **Create policy**.
-
-A green confirmation banner confirms the policy was created:
-
-![Policy Created — Users List](assets/screenshots/Screenshot_2026-04-21_175959.png)
-
-> **What you see:** After policy creation, AWS redirects to the Users page showing a ✅ green banner:
-> *"Policy S3-ReadOnly-PublicAssets created."* with a **View policy** button.
->
-> The Users list now shows **3 users:**
-> | Username | Groups | Last Activity | Password Age |
-> |---|---|---|---|
-> | `Analyst1` | 1 | - | ✅ 19 hours |
-> | `Developer1` | 1 | ✅ 19 hours ago | ✅ 19 hours |
-> | `junior-cloud-engineer` | 0 | - | ✅ 9 minutes |
->
-> Note that `junior-cloud-engineer` has **0 groups** — we're attaching the policy directly to this user for the purposes of this lab.
-
----
-
-### Step 6 — Attach the Policy to the User
-
-Click on **`junior-cloud-engineer`** → **Add permissions** → **Attach policies directly**.
-
-Search for `S3-ReadOnly-PublicAssets` and select it.
-
-![Attach Policy to User](assets/screenshots/Screenshot_2026-04-21_180234.png)
-
-> **What you see:** The Add permissions page for `junior-cloud-engineer` with:
-> - **Attach policies directly** selected (highlighted in blue) — the third permissions option
-> - **Search field** showing `S3-ReadOnly-PublicAssets` typed in the filter
-> - **1 match** found in the 1,485 available policies
-> - The policy row is ✅ **checked** (blue checkbox)
-> - Policy details: Name `S3-ReadOnly-PublicAssets`, Type: **Customer managed**, Attached entities: `0`
-> - The red arrows point to the search field, the policy checkbox, and the **Next** button
->
-> Click **Next**, review the summary, then click **Add permissions**.
-
-> ⚠️ **Note on Direct Attachment:** For this lab, we attach the policy directly to the user to demonstrate the concept clearly. In production environments, AWS recommends attaching policies to **groups**, then adding users to groups. This makes permission management more scalable.
-
----
-
-### Step 7 — Sign In as the Junior Engineer
-
-Open the IAM user sign-in URL in a private/incognito browser window and sign in as `junior-cloud-engineer`.
-
-![IAM User Sign-In — junior-cloud-engineer](assets/screenshots/Screenshot_2026-04-21_180545.png)
-
-> **What you see:** The IAM user sign-in page with:
-> - **Account ID:** `367213325880` — the specific AWS account
-> - **IAM username:** `junior-cloud-engineer`
-> - **Password:** ●●●●●●●● (the autogenerated password retrieved during user creation)
->
-> Click **Sign in** to authenticate as this limited-privilege user.
-
----
-
-### Step 8 — Verify Access is Correctly Scoped
-
-Once signed in as `junior-cloud-engineer`, navigate to S3 and test access boundaries.
-
-**Test 1 — Attempt to access Table Buckets (should fail):**
-
-![Access Denied — Table Buckets](assets/screenshots/Screenshot_2026-04-21_201036.png)
-
-> **What you see:** The S3 Table buckets page showing a red error box:
-> *"You don't have permission to list table buckets"*
-> *"After you or your administrator updates your Identity and Access Management (IAM) permissions to allow `s3tables:ListTableBuckets`, refresh the table buckets list."*
->
-> ✅ **This is correct behaviour.** The `S3-ReadOnly-PublicAssets` policy does not grant `s3tables:ListTableBuckets`. The user is correctly blocked from this feature.
-
-**Test 2 — View the General Purpose Buckets list:**
-
-![S3 Buckets List — Both Visible](assets/screenshots/Screenshot_2026-04-21_202510.png)
-
-> **What you see:** The General purpose buckets page showing **2 buckets:**
-> - `company-payroll` — US East (N. Virginia), Created April 21, 2026
-> - `companypublic-assets` — US East (N. Virginia), Created April 21, 2026
->
-> Both bucket **names** are visible because `s3:ListAllMyBuckets` allows seeing the bucket list. However, clicking into `company-payroll` will result in an access denied error — the user cannot list or access its contents. The red arrows highlight both buckets.
-
-**Test 3 — Attempt to view object properties (should show limited access):**
-
-![Access Denied — Bucket Versioning](assets/screenshots/Screenshot_2026-04-21_202755.png)
-
-> **What you see:** Inside `companypublic-assets`, clicking on the `TesT IAM.txt` object shows its properties page. However, the **Bucket Versioning** section displays a red error:
-> *"You don't have permission to view bucket versioning status"*
-> *"You or your AWS administrator must update your IAM permissions to allow `GetBucketVersioning`."*
->
-> ✅ **This is correct.** The policy only grants `s3:GetObject` (reading file content) and `s3:ListBucket` (listing objects). It does NOT grant `s3:GetBucketVersioning`, `s3:GetBucketReplication`, or other metadata permissions. The user can download the file but cannot inspect bucket configuration settings.
-
-**Test 4 — Attempt to delete an object (should fail):**
-
-![Access Denied — Delete Objects](assets/screenshots/Screenshot_2026-04-21_202855.png)
-
-> **What you see:** When attempting to delete `TesT IAM.txt`, the Delete objects page shows **two warning banners:**
->
-> 1. ⚠️ *"You don't have permission to get the Bucket Versioning setting"*
->    *"Without `s3:getBucketVersioning` permission, we cannot determine if this delete action will add a delete marker to your objects or permanently delete them."*
->
-> 2. ⚠️ *"If a folder is selected for deletion, all objects in the folder will be deleted..."*
->
-> ✅ **This is correct.** Even though the delete page partially loads (showing the UI), attempting to confirm the deletion will result in an `AccessDenied` error because `s3:DeleteObject` is not in the policy. The lack of `s3:getBucketVersioning` is an additional confirmation that the policy is correctly scoped.
-
----
-
-## Results & Proof of Least Privilege
-
-### Access Matrix — What junior-cloud-engineer Can and Cannot Do
-
-| Action | Resource | Expected | Result |
+| Statement | Action | Resource | Purpose |
 |---|---|---|---|
-| List all buckets | All buckets | ✅ Allowed | ✅ Works — both bucket names visible |
-| List objects in `companypublic-assets` | Target bucket | ✅ Allowed | ✅ Works — `TesT IAM.txt` visible |
-| Download/read `TesT IAM.txt` | Target file | ✅ Allowed | ✅ Works — file content accessible |
-| List objects in `company-payroll` | Payroll bucket | ❌ Denied | ❌ Access denied — policy scoped to correct bucket only |
-| Delete any object | Any | ❌ Denied | ❌ Access denied — `s3:DeleteObject` not granted |
-| View bucket versioning | Any | ❌ Denied | ❌ Access denied — `s3:GetBucketVersioning` not granted |
-| List table buckets | Any | ❌ Denied | ❌ Access denied — `s3tables:*` not granted |
-| Upload files | Any | ❌ Denied | ❌ Access denied — `s3:PutObject` not granted |
+| `AllowViewBucketList` | `s3:ListAllMyBuckets` | `*` | Lets the user see the S3 bucket list in the console |
+| `AllowListPublicAssetsBucket` | `s3:ListBucket` | `arn:aws:s3:::companypublic-assets` | Lets the user see files inside the bucket |
+| `AllowReadPublicAssetsObjects` | `s3:GetObject` | `arn:aws:s3:::companypublic-assets/*` | Lets the user download and view individual files |
 
-**Conclusion:** The `S3-ReadOnly-PublicAssets` policy successfully enforces the Principle of Least Privilege. The junior engineer has exactly the access they need — and nothing more.
+> **Key insight:** `s3:ListBucket` controls visibility of bucket contents (applied to the bucket ARN). `s3:GetObject` controls access to individual files (applied to the ARN with `/*`). You need **both** to read files from the console.
 
 ---
 
-## Security Takeaways
+## Key Concepts
 
-### The Two Cardinal Rules of IAM Policy Writing
-
-**Rule 1 — Never use wildcard Actions (`*`) unless absolutely justified**
-
-| ❌ Insecure | ✅ Secure |
+| Term | Definition |
 |---|---|
-| `"Action": "s3:*"` | `"Action": ["s3:GetObject", "s3:ListBucket"]` |
-| `"Action": "*"` | `"Action": "ec2:DescribeInstances"` |
+| **Principle of Least Privilege** | Grant only the minimum permissions required to perform a task — no more, no less |
+| **IAM Policy** | A JSON document that defines what actions are allowed or denied on which AWS resources |
+| **Customer Managed Policy** | A policy you write and control yourself, as opposed to AWS Managed Policies |
+| **ARN** | Amazon Resource Name — a unique identifier for every AWS resource |
+| **S3 Bucket** | A container for storing objects (files) in Amazon S3 |
+| **S3 Object** | An individual file stored inside an S3 bucket |
+| **Effect Allow/Deny** | Whether the statement permits or blocks the specified actions |
+| **Sid** | Statement ID — a human-readable label for a policy statement |
+| **Resource ARN with /*** | Applies the policy to all objects inside a bucket |
 
-Every permission you grant is a potential attack vector. Grant only what the task requires.
+---
 
-**Rule 2 — Never use wildcard Resources (`*`) when a specific ARN is available**
-
-| ❌ Insecure | ✅ Secure |
-|---|---|
-| `"Resource": "*"` | `"Resource": "arn:aws:s3:::companypublic-assets/*"` |
-| All buckets in account | Only the specific bucket needed |
-
-The only time `"Resource": "*"` is acceptable is when the action genuinely has no resource-level control (e.g., `s3:ListAllMyBuckets`).
-
-### IAM Policy Writing Checklist
-
-Before saving any IAM policy, ask yourself:
-
-- [ ] Does every `Action` need to be here, or can some be removed?
-- [ ] Is every `Resource` ARN as specific as possible?
-- [ ] Are there any `*` wildcards that could be replaced with specific values?
-- [ ] Have I tested this policy with the minimum required permissions first?
-- [ ] Have I documented why each statement exists (`Sid` field)?
-- [ ] Would a compromised version of this user cause minimal damage?
-- [ ] Is this policy attached to a group (preferred) rather than directly to a user?
-
-### The Blast Radius Principle
-
-Always think about **blast radius** — if this IAM user or role were compromised, what is the worst an attacker could do with these permissions?
+## Architecture Overview
 
 ```
-Wildcard policy blast radius:
-┌──────────────────────────────────────────────┐
-│ s3:* on * = can delete ALL data in ALL        │
-│ buckets across the entire AWS account         │
-│ → CATASTROPHIC                                │
-└──────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    AWS Account (Root)                        │
+│                                                             │
+│  ┌─────────────────┐    ┌──────────────────────────────┐   │
+│  │   S3 Buckets    │    │        IAM                    │   │
+│  │                 │    │                               │   │
+│  │  companypublic  │    │  User: junior-cloud-engineer  │   │
+│  │  -assets        │◄───│                               │   │
+│  │  [accessible]   │    │  Policy: S3-ReadOnly-          │   │
+│  │                 │    │          PublicAssets          │   │
+│  │  company-payroll│    │                               │   │
+│  │  [BLOCKED]      │    │  Permissions:                 │   │
+│  │                 │    │  + s3:ListAllMyBuckets (allow) │   │
+│  └─────────────────┘    │  + s3:ListBucket (allow)      │   │
+│                         │  + s3:GetObject (allow)       │   │
+│                         │  - s3:DeleteObject (blocked)  │   │
+│                         │  - s3:PutObject (blocked)     │   │
+│                         │  - payroll bucket (blocked)   │   │
+│                         └──────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
 
-Least privilege policy blast radius:
-┌──────────────────────────────────────────────┐
-│ s3:GetObject on companypublic-assets/*        │
-│ = can only READ files already in this bucket  │
-│ → MINIMAL                                     │
-└──────────────────────────────────────────────┘
+---
+
+## Phase 1 — Create the S3 Bucket
+
+### Step 1.1 — Search for S3
+
+In the AWS Console, type **S3** in the top search bar and select **S3 — Scalable Storage in the Cloud**.
+
+![Search for S3](assets/screenshots/01-search-s3.png)
+
+> **What you see:** The AWS global search results showing S3 under Services. Always click the top result under **Services** to open the S3 console.
+
+---
+
+### Step 1.2 — Open the S3 Landing Page
+
+The Amazon S3 homepage loads with a quick-access **Create a bucket** card on the right side.
+
+![S3 Landing Page](assets/screenshots/02-s3-landing-create-bucket.png)
+
+> **What you see:** The Amazon S3 product page. The **Create bucket** button is highlighted with a red arrow on the right-side card. Click it to start the bucket creation wizard.
+
+---
+
+### Step 1.3 — Configure the Bucket
+
+On the Create bucket page, fill in the following settings:
+
+![Create Bucket — Name and Settings](assets/screenshots/03-create-bucket-name.png)
+
+> **What you see and what to set:**
+>
+> | Setting | Value | Reason |
+> |---|---|---|
+> | **Bucket name** | `companypublic-assets` | Must be globally unique. Use lowercase letters, numbers, and hyphens only. |
+> | **Object Ownership** | ACLs disabled (recommended) | Access controlled by policies only, not ACLs. |
+> | **Block all public access** | Checked (default) | Access is controlled through IAM policies, not internet-public settings. |
+>
+> The red arrow points to the **Bucket name** field. Scroll down and click **Create bucket**.
+
+---
+
+### Step 1.4 — Confirm Bucket Creation
+
+A green success banner confirms the bucket was created.
+
+![Bucket Created Successfully](assets/screenshots/04-bucket-created-success.png)
+
+> **What you see:** The `companypublic-assets` bucket detail page with a green banner: *"Successfully created bucket 'companypublic-assets'."* The bucket is empty (Objects: 0) and ready for files.
+
+---
+
+## Phase 2 — Upload a Test File
+
+We need at least one file in the bucket to verify that our IAM user can read it.
+
+### Step 2.1 — Upload the Test File
+
+Inside the `companypublic-assets` bucket, click **Upload** and add your test file.
+
+![Upload File Page](assets/screenshots/05-upload-file.png)
+
+> **What you see:** The Upload page showing:
+> - `TesT IAM.txt` (19.0 B, text/plain) added for upload
+> - **Destination** — `s3://companypublic-assets`
+>
+> The red arrows highlight the file in the list and the **Upload** button (bottom-right). Click **Upload**.
+
+---
+
+### Step 2.2 — Confirm Upload Success
+
+![Upload Succeeded](assets/screenshots/06-upload-success.png)
+
+> **What you see:** The Upload status page confirming:
+> - **Upload succeeded** — green banner
+> - **Succeeded** — 1 file, 19.0 B (100%)
+> - **Failed** — 0 files (0%)
+> - `TesT IAM.txt` shows **Status: Succeeded**
+>
+> Note: *"After you navigate away from this page, the following information is no longer available."* Click **Close** to return to the bucket.
+
+---
+
+## Phase 3 — Create the IAM User
+
+Now we create the IAM user that represents our Junior Cloud Engineer.
+
+### Step 3.1 — Create the junior-cloud-engineer User
+
+Navigate to **IAM > Users > Create user** and fill in the user details.
+
+![Create junior-cloud-engineer User](assets/screenshots/07-create-user-junior.png)
+
+> **What you see:** Step 1 of 4 — Specify user details:
+>
+> | Field | Value | Notes |
+> |---|---|---|
+> | **User name** | `junior-cloud-engineer` | Descriptive name reflecting the role |
+> | **Console access** | Enabled | The user needs to log in to the AWS Console |
+> | **Console password** | Autogenerated password | AWS generates a secure random password |
+> | **Users must create new password** | Unchecked | For this lab — allows direct sign-in with the autogenerated password |
+>
+> The red arrows highlight the username field, the Autogenerated password option, the password reset checkbox, and the **Next** button. Click **Next** to proceed. We will attach the policy after creating it in Phase 4.
+
+---
+
+## Phase 4 — Create the Custom IAM Policy
+
+This is the core of the lab — writing the least-privilege policy from scratch.
+
+### Step 4.1 — Navigate to IAM Policies
+
+In the IAM left sidebar, click **Policies**.
+
+![IAM Policies Page](assets/screenshots/08-iam-policies-page.png)
+
+> **What you see:** The Policies list showing **1484 policies** — a combination of AWS managed policies and customer managed policies. The red arrow points to **Policies** in the sidebar and the **Create policy** button (top-right, orange). Click **Create policy**.
+
+---
+
+### Step 4.2 — Write the Policy JSON
+
+On the Create policy page, switch to the **JSON** tab and paste the secure policy.
+
+![Custom Policy JSON Editor](assets/screenshots/09-custom-policy-json-editor.png)
+
+> **What you see:** The **Policy editor** in JSON mode showing the `S3-ReadOnly-PublicAssets` policy being built. The right panel shows the Edit statement panel for `AllowViewBucketList`.
+
+Paste this JSON into the editor:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowViewBucketList",
+      "Effect": "Allow",
+      "Action": "s3:ListAllMyBuckets",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowListPublicAssetsBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::companypublic-assets"
+    },
+    {
+      "Sid": "AllowReadPublicAssetsObjects",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::companypublic-assets/*"
+    }
+  ]
+}
+```
+
+> **Breaking down each statement:**
+>
+> **Statement 1 — AllowViewBucketList**
+> `s3:ListAllMyBuckets` with `"Resource": "*"` — account-level action that lets the S3 console show the bucket list. Without this, the console shows nothing.
+>
+> **Statement 2 — AllowListPublicAssetsBucket**
+> `s3:ListBucket` on the bucket ARN (no `/*`) — allows the user to see files listed inside `companypublic-assets`. Without this, the bucket appears but shows empty.
+>
+> **Statement 3 — AllowReadPublicAssetsObjects**
+> `s3:GetObject` on `arn:aws:s3:::companypublic-assets/*` — the `/*` targets every object (file) within the bucket. Without this, files are listed but cannot be opened or downloaded.
+
+After pasting the JSON, click **Next**, enter:
+- **Policy name:** `S3-ReadOnly-PublicAssets`
+- **Description:** `Grants read-only access to the companypublic-assets S3 bucket only`
+
+Click **Create policy**.
+
+---
+
+### Step 4.3 — Confirm Policy Created
+
+![Policy Created — Users List](assets/screenshots/10-policy-created-users-list.png)
+
+> **What you see:** A green banner confirms: *"Policy S3-ReadOnly-PublicAssets created."* The Users list now shows all three users:
+>
+> | User | Groups | Last Activity |
+> |---|---|---|
+> | `Analyst1` | 1 | — |
+> | `Developer1` | 1 | 19 hours ago |
+> | `junior-cloud-engineer` | 0 | — (9 minutes ago) |
+>
+> Note that `junior-cloud-engineer` has 0 groups — we will attach the custom policy directly next.
+
+---
+
+## Phase 5 — Attach the Policy to the User
+
+### Step 5.1 — Search for and Attach the Custom Policy
+
+Navigate to **IAM > Users > junior-cloud-engineer > Add permissions > Attach policies directly**.
+
+Search for `S3-ReadOnly-PublicAssets` in the policy search box.
+
+![Attach Policy to User](assets/screenshots/11-attach-policy-to-user.png)
+
+> **What you see:** The Add permissions page for `junior-cloud-engineer`:
+>
+> - **Permissions option:** `Attach policies directly` (highlighted in blue)
+> - **Search box:** `S3-ReadOnly-PublicAssets` — returns 1 match
+> - **Policy result:** Type: **Customer managed**, Attached entities: **0** (this is our new policy)
+> - **Checkbox:** Selected (checked and highlighted in blue)
+>
+> The red arrows point to the search field, the policy checkbox, and the **Next** button. Click **Next**, review the summary, then click **Add permissions**.
+
+---
+
+## Phase 6 — Sign In and Verify Permissions
+
+### Step 6.1 — Sign In as the IAM User
+
+Navigate to the IAM sign-in URL and log in with the `junior-cloud-engineer` credentials.
+
+![IAM User Sign-In](assets/screenshots/12-iam-user-signin.png)
+
+> **What you see:** The IAM user sign in page with:
+> - **Account ID:** `367213325880`
+> - **IAM username:** `junior-cloud-engineer`
+> - **Password:** (the autogenerated password from Phase 3)
+>
+> Click **Sign in** to proceed.
+
+---
+
+## Results — Least Privilege in Action
+
+After signing in as `junior-cloud-engineer`, we test every expected permission and restriction.
+
+---
+
+### Test 1 — Can See the S3 Bucket List (Expected: ALLOWED)
+
+Navigate to **S3 > General purpose buckets**.
+
+![Bucket List — Both Buckets Visible](assets/screenshots/14-bucket-list-visible.png)
+
+> **What you see:** The S3 Buckets page showing **General purpose buckets (2)**:
+>
+> | Bucket | Region |
+> |---|---|
+> | `company-payroll` | US East (N. Virginia) |
+> | `companypublic-assets` | US East (N. Virginia) |
+>
+> Both buckets are **listed** because `s3:ListAllMyBuckets` allows listing bucket names. **Seeing a bucket name is not the same as having access to it.** The key test is what happens when the user tries to open `company-payroll` — that will be denied because the policy only targets `companypublic-assets`.
+>
+> **Result: PASS** — Bucket list visible as expected.
+
+---
+
+### Test 2 — Cannot Access Table Buckets (Expected: BLOCKED)
+
+Navigate to **S3 > Table buckets** in the left sidebar.
+
+![Access Denied — Table Buckets](assets/screenshots/13-access-denied-table-buckets.png)
+
+> **What you see:** An error panel: **"You don't have permission to list table buckets"**
+>
+> *"After you or your administrator updates your IAM permissions to allow `s3tables:ListTableBuckets`, refresh the table buckets list."*
+>
+> Our policy grants only specific standard S3 actions. Separate S3 features like Table buckets are completely blocked.
+>
+> **Result: PASS** — Access correctly denied.
+
+---
+
+### Test 3 — Cannot View Bucket Versioning (Expected: BLOCKED)
+
+Navigate to the `TesT IAM.txt` object inside `companypublic-assets` and view its Properties tab.
+
+![No Permission — Bucket Versioning](assets/screenshots/15-no-permission-versioning.png)
+
+> **What you see:** **"You don't have permission to view bucket versioning status"**
+>
+> *"You or your AWS administrator must update your IAM permissions to allow `GetBucketVersionioning`."*
+>
+> Our policy only granted `s3:ListAllMyBuckets`, `s3:ListBucket`, and `s3:GetObject`. Actions like `s3:GetBucketVersioning` are **not included** — so they are implicitly denied. AWS's default posture is **deny everything unless explicitly allowed**.
+>
+> **Result: PASS** — Administrative actions correctly blocked.
+
+---
+
+### Test 4 — Cannot Delete Files (Expected: BLOCKED)
+
+Select `TesT IAM.txt` and attempt to delete it.
+
+![No Permission — Delete Objects](assets/screenshots/16-no-permission-delete.png)
+
+> **What you see:** The Delete objects page shows two warning banners:
+>
+> **Warning 1:** *"You don't have permission to get the Bucket Versioning setting. Without `s3:getBucketVersioning` permission, we cannot determine if this delete action will add a delete marker to your objects or permanently delete them."*
+>
+> **Warning 2:** Additional warning about permanent deletion risks.
+>
+> The user can navigate to the delete page but the actual delete operation will fail because `s3:DeleteObject` is not in the policy. The versioning warning appears because `s3:GetBucketVersioning` is also missing.
+>
+> **Result: PASS** — Deletion correctly blocked. The Junior Cloud Engineer cannot destroy data.
+
+---
+
+### Permission Test Summary
+
+| Action Tested | Expected Result | Actual Result |
+|---|---|---|
+| List S3 bucket names | ALLOWED | PASS — Both buckets visible in list |
+| List files in `companypublic-assets` | ALLOWED | PASS — TesT IAM.txt visible |
+| Read/download files from `companypublic-assets` | ALLOWED | PASS — File accessible |
+| Access `company-payroll` bucket contents | BLOCKED | PASS — Access denied |
+| Delete files | BLOCKED | PASS — Permission denied |
+| View bucket versioning | BLOCKED | PASS — Permission denied |
+| Access Table buckets | BLOCKED | PASS — Permission denied |
+| Modify any resource | BLOCKED | PASS — No write permissions |
+
+**Result: 8 of 8 — Policy behaves exactly as intended.**
+
+---
+
+## Security Lessons Learned
+
+**1. Wildcards are a security risk**
+`s3:*` and `"Resource": "*"` are convenient but destroy your security posture. Every wildcard in a policy should be questioned: Do they really need ALL of these?
+
+**2. Implicit Deny is your friend**
+AWS denies all actions by default. You do not need explicit Deny statements for everything you do not want — simply do not include those actions in your Allow statements.
+
+**3. Bucket-level vs Object-level permissions**
+S3 requires separate permission statements for bucket-level operations (`s3:ListBucket` on the bucket ARN) and object-level operations (`s3:GetObject` on `bucket-arn/*`). Confusing these is a common mistake.
+
+**4. Console usability sometimes requires broad actions**
+`s3:ListAllMyBuckets` requires `"Resource": "*"` because it is an account-level action. This is an accepted trade-off — the user sees bucket names but can only access the authorised one.
+
+**5. Seeing is not the same as accessing**
+The user can see `company-payroll` in the bucket list but cannot open it, list its contents, or touch its objects. Listing bucket names is a console usability requirement, not a security hole.
+
+**6. Always test your policies**
+Always log in as the target user to verify the policy behaves as intended — both that allowed actions work and that blocked actions are rejected.
+
+---
+
+## The Complete Secure Policy (Reference)
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowViewBucketList",
+      "Effect": "Allow",
+      "Action": "s3:ListAllMyBuckets",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowListPublicAssetsBucket",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::companypublic-assets"
+    },
+    {
+      "Sid": "AllowReadPublicAssetsObjects",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::companypublic-assets/*"
+    }
+  ]
+}
 ```
 
 ---
 
 ## Resources
 
-- 📖 [AWS IAM Policy Reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies.html)
-- 📖 [Amazon S3 Actions Reference](https://docs.aws.amazon.com/AmazonS3/latest/userguide/list_amazons3.html)
-- 📖 [IAM JSON Policy Elements](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements.html)
-- 🔧 [AWS Policy Simulator](https://policysim.aws.amazon.com/) — test policies before applying them
-- 📖 [Principle of Least Privilege — AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#grant-least-privilege)
-- 📖 [Amazon Resource Names (ARNs)](https://docs.aws.amazon.com/general/latest/gr/aws-arns-and-namespaces.html)
+- [AWS IAM Policy Reference](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies.html)
+- [Amazon S3 Actions Reference](https://docs.aws.amazon.com/AmazonS3/latest/userguide/list_amazons3.html)
+- [IAM Policy Best Practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
+- [Principle of Least Privilege — AWS](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html#grant-least-privilege)
+- [AWS Policy Simulator](https://policysim.aws.amazon.com/) — Test your policies without affecting real resources
 
 ---
 
 ## Author
 
-**Grace Emmanuel** — Cloud & Cybersecurity  
+**Grace Emmanuel** — Cloud and Cybersecurity  
 GitHub: [@CyberGracie](https://github.com/CyberGracie/CyberGracie)
 
 ---
 
-> *This lab is part of a hands-on AWS IAM and cloud security bootcamp series. All screenshots are from a live AWS environment.*
+> *This lab is part of a hands-on AWS IAM security series. All screenshots are from a live AWS environment.*
