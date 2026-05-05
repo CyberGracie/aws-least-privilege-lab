@@ -1,0 +1,238 @@
+# Troubleshooting Guide
+
+## Common Issues & Solutions
+
+### 🔴 Issue 1: "Bucket name already exists" Error
+
+**Problem:** When creating the `companypublic-assets` bucket, AWS says the bucket name is already taken.
+
+**Why:** S3 bucket names are **globally unique across all AWS accounts worldwide**. Your bucket name might already be used by someone else.
+
+**Solution:**
+1. Use a **unique bucket name** instead:
+   - `companypublic-assets-{your-initials}-{date}`
+   - Example: `companypublic-assets-ge-20260505`
+2. **Update the policy** to match your new bucket name:
+   - Replace `companypublic-assets` with your new name in `policy.json`
+   - Update the ARN in both statements
+
+**Example:**
+```json
+"Resource": "arn:aws:s3:::companypublic-assets-ge-20260505"
+"Resource": "arn:aws:s3:::companypublic-assets-ge-20260505/*"
+```
+
+---
+
+### 🔴 Issue 2: "Access Denied" When Signing In as IAM User
+
+**Problem:** The IAM user can't log in, or gets "Access Denied" immediately after signing in.
+
+**Why:** This usually means the IAM policy wasn't attached correctly, or the user's credentials are wrong.
+
+**Checklist:**
+- ✅ Is the policy attached to the user? Check: **IAM > Users > junior-cloud-engineer > Permissions**
+- ✅ Are you using the correct password? (It was auto-generated in Phase 3)
+- ✅ Did you check the account ID in the sign-in URL? Verify it matches your AWS account
+- ✅ Try a different browser or incognito window to rule out caching issues
+
+**Sign-in URL format:**
+```
+https://{ACCOUNT-ID}.signin.aws.amazon.com/console/
+```
+
+Get your account ID from: **IAM Console > Dashboard** (top-right area)
+
+---
+
+### 🔴 Issue 3: "You don't have permission to list buckets" (S3)
+
+**Problem:** IAM user is signed in but S3 shows "You don't have permission to list buckets."
+
+**Why:** The policy is missing the `s3:ListAllMyBuckets` statement.
+
+**Solution:**
+1. Go to **IAM > Policies > S3-ReadOnly-PublicAssets**
+2. Click **Edit policy** and ensure this statement exists:
+```json
+{
+  "Sid": "AllowViewBucketList",
+  "Effect": "Allow",
+  "Action": "s3:ListAllMyBuckets",
+  "Resource": "*"
+}
+```
+3. If missing, add it back and save
+4. Give it 1-2 minutes for AWS to propagate changes
+5. Refresh the S3 console
+
+---
+
+### 🟡 Issue 4: "We don't have permission to list bucket" (Inside Bucket)
+
+**Problem:** User can see the bucket list, but clicking into `companypublic-assets` shows "We don't have permission to list bucket."
+
+**Why:** The policy is missing the `s3:ListBucket` statement, or the bucket name in the ARN is wrong.
+
+**Solution:**
+1. Check the policy has this statement:
+```json
+{
+  "Sid": "AllowListPublicAssetsBucket",
+  "Effect": "Allow",
+  "Action": "s3:ListBucket",
+  "Resource": "arn:aws:s3:::companypublic-assets"
+}
+```
+
+2. **Verify the bucket name matches exactly** (case-sensitive):
+   - Policy says: `companypublic-assets`
+   - Your bucket name: `companypublic-assets` ✅
+   - Your bucket name: `CompanyPublic-Assets` ❌ (won't work)
+
+3. Refresh the console after fixing
+
+---
+
+### 🟡 Issue 5: Can't Download/Open Files (GetObject Fails)
+
+**Problem:** Files are listed, but clicking "Download" or "Open" fails with "Access Denied."
+
+**Why:** The policy is missing the `s3:GetObject` statement, or the resource ARN is wrong.
+
+**Solution:**
+1. Check the policy has this statement:
+```json
+{
+  "Sid": "AllowReadPublicAssetsObjects",
+  "Effect": "Allow",
+  "Action": "s3:GetObject",
+  "Resource": "arn:aws:s3:::companypublic-assets/*"
+}
+```
+
+2. **Important:** Notice the `/*` at the end (this applies to ALL objects in the bucket)
+3. Refresh the console and try downloading again
+
+---
+
+### 🟡 Issue 6: Verification Tests Show "Access Denied" But Shouldn't
+
+**Problem:** You expected an action to be allowed, but the user got "Access Denied."
+
+**Why:** The policy might be missing a required action, or you're testing a different permission than intended.
+
+**Common scenarios:**
+- **Test expects PASS but got FAIL:**
+  - Is the action in the policy's "Action" field?
+  - Is the resource ARN correct?
+  - Have you waited 1-2 minutes for AWS to apply changes?
+
+**Solution:**
+1. Use **AWS Policy Simulator** to test your policy:
+   - URL: https://policysim.aws.amazon.com/
+   - Select the policy
+   - Choose the action to test
+   - See exactly why it passed or failed
+
+2. Review the policy against the README's **Permission Test Summary** table
+
+---
+
+### 🟡 Issue 7: IAM User Can Unexpectedly Access Other Buckets
+
+**Problem:** The `junior-cloud-engineer` user can access `company-payroll` (should be blocked!).
+
+**Why:** The policy might be using wildcards (`*`) in the resource field instead of specific ARNs.
+
+**Check:**
+```json
+// ❌ WRONG — Grants access to ALL buckets
+"Resource": "*"
+
+// ✅ CORRECT — Only companypublic-assets
+"Resource": "arn:aws:s3:::companypublic-assets"
+```
+
+**Fix:**
+1. Go to **IAM > Policies > S3-ReadOnly-PublicAssets > Edit**
+2. Replace any `"Resource": "*"` with specific bucket ARNs
+3. Save and test again
+
+---
+
+### 🟡 Issue 8: Autogenerated Password Not Working
+
+**Problem:** The password AWS generated for the IAM user doesn't work.
+
+**Why:** 
+- Password was viewed once during user creation but not saved
+- Password expired (AWS doesn't auto-expire, but corporate policy might)
+- Typo when copying/pasting
+
+**Solution:**
+1. As the AWS account owner, go to **IAM > Users > junior-cloud-engineer**
+2. Click **Security credentials tab**
+3. Under "Console access," click **Reset password**
+4. Generate a new autogenerated password
+5. Copy and save it somewhere safe
+6. Try signing in again
+
+---
+
+### 🟡 Issue 9: "You don't have permission to perform: iam:GetUser" 
+
+**Problem:** IAM user logs in but immediately sees permission error.
+
+**Why:** The policy doesn't grant basic IAM read permissions the console needs.
+
+**Solution:**
+This is actually **expected behavior** for this lab! The policy intentionally blocks non-S3 permissions. You should only be able to:
+- ✅ View S3 bucket list
+- ✅ List files in `companypublic-assets`
+- ✅ Download files from `companypublic-assets`
+
+Everything else should show "Access Denied" — that's the point of least privilege!
+
+---
+
+### 🔧 Issue 10: Still Can't Figure It Out?
+
+**Steps to debug:**
+
+1. **Verify policy is attached:**
+   ```
+   IAM Console → Users → junior-cloud-engineer → Permissions
+   ```
+   Do you see `S3-ReadOnly-PublicAssets` listed?
+
+2. **Check policy JSON syntax:**
+   - Copy the policy into [JSONLint.com](https://jsonlint.com)
+   - Any syntax errors?
+
+3. **Wait for propagation:**
+   - AWS changes can take 1-2 minutes to apply
+   - Try a different browser/incognito window
+
+4. **Compare to official policy:**
+   - Open [`policy.json`](policy.json) in this repo
+   - Does your policy match exactly?
+   - Check bucket names, ARNs, and action names
+
+5. **Open an issue:**
+   - [GitHub Issues](https://github.com/CyberGracie/aws-least-privilege-lab/issues)
+   - Include: error message, steps to reproduce, your AWS region
+   - Screenshot of the policy (blur account IDs for security)
+
+---
+
+## 📚 Additional Resources
+
+- [AWS IAM Troubleshooting](https://docs.aws.amazon.com/IAM/latest/UserGuide/troubleshoot.html)
+- [S3 Access Denied Errors](https://docs.aws.amazon.com/AmazonS3/latest/userguide/troubleshooting-access.html)
+- [AWS Policy Simulator](https://policysim.aws.amazon.com/) — Test policies without affecting real resources
+- [IAM Best Practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
+
+---
+
+**Having an issue not listed here?** Open a [GitHub issue](https://github.com/CyberGracie/aws-least-privilege-lab/issues) and we'll help! 🤝
